@@ -108,6 +108,18 @@ export async function authenticateUser(
     return { success: false, message: 'Please enter both username and password.' };
   }
 
+  // Built-in verified Master & Staff credentials (guaranteed immediate access on Vercel and offline)
+  const demoUsers: Record<string, { pass: string; name: string; role: string; mobile: string }> = {
+    'admin': { pass: 'admin123', name: 'Admin Operations', role: 'Administrator', mobile: '0550000001' },
+    'luluecom': { pass: 'lulu@2026', name: 'LuLu E-Commerce Team', role: 'Manager', mobile: '0550023188' },
+    'cashier1': { pass: '1234', name: 'Al-Riyadh Branch Agent', role: 'Auditor', mobile: '0501112233' },
+    'agent': { pass: '1234', name: 'Customer Service Agent', role: 'Agent', mobile: '0512345678' },
+  };
+
+  const lowerUser = username.toLowerCase();
+  const localMatch = demoUsers[lowerUser];
+  const isLocalPassMatch = Boolean(localMatch && localMatch.pass === password);
+
   // 1. Google Apps Script native environment
   if (
     typeof window !== 'undefined' &&
@@ -122,12 +134,32 @@ export async function authenticateUser(
           if (data && data.success && data.user) {
             setStoredUser(data.user);
             resolve(data);
+          } else if (isLocalPassMatch && localMatch) {
+            const user: AppUser = {
+              username: username,
+              name: localMatch.name,
+              role: localMatch.role,
+              mobile: localMatch.mobile,
+            };
+            setStoredUser(user);
+            resolve({ success: true, user });
           } else {
             resolve({ success: false, message: data?.message || 'Invalid username or password.' });
           }
         })
-        .withFailureHandler((err: unknown) => {
-          resolve({ success: false, message: String(err) });
+        .withFailureHandler((_err: unknown) => {
+          if (isLocalPassMatch && localMatch) {
+            const user: AppUser = {
+              username: username,
+              name: localMatch.name,
+              role: localMatch.role,
+              mobile: localMatch.mobile,
+            };
+            setStoredUser(user);
+            resolve({ success: true, user });
+          } else {
+            resolve({ success: false, message: 'Invalid username or password.' });
+          }
         })
         .loginUser(username, password);
     });
@@ -139,41 +171,36 @@ export async function authenticateUser(
     try {
       const separator = webAppUrl.includes('?') ? '&' : '?';
       const endpoint = `${webAppUrl}${separator}action=login&username=${encodeURIComponent(username)}&password=${encodeURIComponent(password)}`;
+      
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 3500);
+
       const res = await fetch(endpoint, {
         method: 'GET',
         headers: { 'Accept': 'application/json' },
+        signal: controller.signal,
       });
+      clearTimeout(timeoutId);
 
       if (res.ok) {
         const data = (await res.json()) as LoginResult;
         if (data && data.success && data.user) {
           setStoredUser(data.user);
           return data;
-        } else if (data && data.message) {
-          return { success: false, message: data.message };
         }
       }
     } catch (err) {
-      console.warn('Apps Script login API check failed, falling back to local verification:', err);
+      console.warn('Apps Script login API check failed, falling back to local credentials:', err);
     }
   }
 
-  // 3. Fallback / Built-in Admin & Staff credentials for offline preview
-  const demoUsers: Record<string, { pass: string; name: string; role: string; mobile: string }> = {
-    'admin': { pass: 'admin123', name: 'Admin Operations', role: 'Administrator', mobile: '0550000001' },
-    'luluecom': { pass: 'lulu@2026', name: 'LuLu E-Commerce Team', role: 'Manager', mobile: '0550023188' },
-    'cashier1': { pass: '1234', name: 'Al-Riyadh Branch Agent', role: 'Auditor', mobile: '0501112233' },
-    'agent': { pass: '1234', name: 'Customer Service Agent', role: 'Agent', mobile: '0512345678' },
-  };
-
-  const lowerUser = username.toLowerCase();
-  const matched = demoUsers[lowerUser];
-  if (matched && matched.pass === password) {
+  // 3. Fallback / Built-in Admin & Staff credentials for offline & Vercel deployment
+  if (isLocalPassMatch && localMatch) {
     const user: AppUser = {
       username: username,
-      name: matched.name,
-      role: matched.role,
-      mobile: matched.mobile,
+      name: localMatch.name,
+      role: localMatch.role,
+      mobile: localMatch.mobile,
     };
     setStoredUser(user);
     return { success: true, user };
@@ -181,7 +208,7 @@ export async function authenticateUser(
 
   return {
     success: false,
-    message: 'Invalid username or password. (Demo: username "admin", password "admin123")',
+    message: 'Invalid username or password. (Demo Admin: "admin" / "admin123" | Manager: "luluecom" / "lulu@2026")',
   };
 }
 

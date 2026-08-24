@@ -135,6 +135,37 @@ export const LoginPage: React.FC<LoginPageProps> = ({
                 </>
               )}
             </button>
+
+            {/* Quick-fill Demo / Master Accounts */}
+            <div className="pt-3 border-t border-white/10">
+              <div className="text-[11px] font-semibold text-gray-400 mb-2 text-center">
+                Quick Fill Verified Accounts:
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setUsername('admin');
+                    setPassword('admin123');
+                    setError(null);
+                  }}
+                  className="py-1.5 px-2 rounded-lg bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 text-amber-300 text-xs font-bold transition-all text-center cursor-pointer"
+                >
+                  👑 Admin (Full)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setUsername('luluecom');
+                    setPassword('lulu@2026');
+                    setError(null);
+                  }}
+                  className="py-1.5 px-2 rounded-lg bg-cyan-500/10 hover:bg-cyan-500/20 border border-cyan-500/30 text-cyan-300 text-xs font-bold transition-all text-center cursor-pointer"
+                >
+                  💼 Manager (Ops)
+                </button>
+              </div>
+            </div>
           </form>
         </div>
 
