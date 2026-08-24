@@ -1,0 +1,6 @@
+{
+  "name": "Lucky Customer Jackpot",
+  "description": "Grand casino-style customer rewards jackpot checker with running marquee lights, animated 30-day and 7-day calendar slot reveal, customer stats, and multi-customer lookup.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
