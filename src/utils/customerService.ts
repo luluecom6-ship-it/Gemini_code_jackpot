@@ -43,12 +43,14 @@ export function formatSAR(value: number): string {
 /**
  * Builds a deterministic boolean array of size `totalDays` where exactly
  * `activeCount` days are true (ordered = ⭐) and the rest are false (missed = 😔).
+ * For 30 days, it ensures any recent weekly active days are aligned into the last 7 days.
  */
 export function buildDailyOrderMap(
   totalDays: number,
   activeCount: number,
   isWin: boolean,
-  seedNumber: number = 42
+  seedNumber: number = 42,
+  recentWeekActiveCount: number = 0
 ): boolean[] {
   const clampedCount = Math.max(0, Math.min(totalDays, activeCount));
   
@@ -59,7 +61,41 @@ export function buildDailyOrderMap(
     return Array(totalDays).fill(false);
   }
 
-  // Deterministically shuffle indices to scatter the active days across the month
+  // If 30 days and recentWeekActiveCount is specified, ensure recent week days (last 7 slots: index 23..29) get placed first
+  if (totalDays === 30 && recentWeekActiveCount > 0) {
+    const res = Array(30).fill(false);
+    const weekCount = Math.min(7, Math.min(clampedCount, recentWeekActiveCount));
+    
+    // Pick slots in the last 7 days (indices 23..29)
+    const weekIndices = [23, 24, 25, 26, 27, 28, 29];
+    for (let i = weekIndices.length - 1; i > 0; i--) {
+      const j = Math.abs((seedNumber * 41 + i * 13 + 5) % (i + 1));
+      const temp = weekIndices[i];
+      weekIndices[i] = weekIndices[j];
+      weekIndices[j] = temp;
+    }
+    for (let i = 0; i < weekCount; i++) {
+      res[weekIndices[i]] = true;
+    }
+
+    // Remaining active days to distribute in the earlier 23 days (indices 0..22)
+    const remainingCount = clampedCount - weekCount;
+    if (remainingCount > 0) {
+      const earlierIndices = Array.from({ length: 23 }, (_, i) => i);
+      for (let i = earlierIndices.length - 1; i > 0; i--) {
+        const j = Math.abs((seedNumber * 37 + i * 19 + 7) % (i + 1));
+        const temp = earlierIndices[i];
+        earlierIndices[i] = earlierIndices[j];
+        earlierIndices[j] = temp;
+      }
+      for (let i = 0; i < remainingCount && i < earlierIndices.length; i++) {
+        res[earlierIndices[i]] = true;
+      }
+    }
+    return res;
+  }
+
+  // Deterministically shuffle indices to scatter the active days across the window
   const indices = Array.from({ length: totalDays }, (_, i) => i);
   for (let i = indices.length - 1; i > 0; i--) {
     const j = Math.abs((seedNumber * 37 + i * 19 + 7) % (i + 1));
@@ -452,13 +488,30 @@ export async function fetchCustomerJackpotData(
         (customerSpend > 0 && customerSpend >= highestSpend)
       );
 
-      const daily30 = Array.isArray(data.dailyOrders30)
-        ? (data.dailyOrders30 as boolean[])
-        : buildDailyOrderMap(30, active30Count, isMonthlyWin, seed);
+      // If real order_dates array is provided (e.g. ['2026-08-20', '2026-08-23']), map directly to 30 calendar days
+      let daily30: boolean[];
+      let daily7: boolean[];
 
-      const daily7 = Array.isArray(data.dailyOrders7)
-        ? (data.dailyOrders7 as boolean[])
-        : buildDailyOrderMap(7, active7Count, isWeeklyWin, seed + 99);
+      if (Array.isArray(data.order_dates) || Array.isArray(data.orderDates)) {
+        const orderDateSet = new Set((data.order_dates || data.orderDates) as string[]);
+        const now = new Date();
+        daily30 = [];
+        for (let i = 29; i >= 0; i--) {
+          const d = new Date(now);
+          d.setDate(now.getDate() - i);
+          const yyyyMmDd = d.toISOString().split('T')[0];
+          daily30.push(orderDateSet.has(yyyyMmDd));
+        }
+        daily7 = daily30.slice(23); // Last 7 days
+      } else {
+        daily30 = Array.isArray(data.dailyOrders30)
+          ? (data.dailyOrders30 as boolean[])
+          : buildDailyOrderMap(30, active30Count, isMonthlyWin, seed, active7Count);
+
+        daily7 = Array.isArray(data.dailyOrders7)
+          ? (data.dailyOrders7 as boolean[])
+          : daily30.slice(23);
+      }
 
       // Extract customer name from customer__first_name and customer__last_name if provided
       let derivedName = '';
@@ -625,15 +678,15 @@ export async function fetchCustomerJackpotData(
   const num = parseInt(mobile.slice(-4), 10) || 5432;
   const isVip = num % 11 === 0;
   const activeDays30 = Math.min(30, Math.max(1, (num % 28) + 2));
-  const activeDays7 = Math.min(7, Math.max(0, (num % 8)));
+  const activeDays7 = Math.min(7, Math.min(activeDays30, num % 8));
   const spend = Number(((num * 1.85) + 320).toFixed(2));
   const orders = Math.max(1, Math.floor(activeDays30 * 1.3));
 
   const monthWins = activeDays30 === 30;
   const weekWins = activeDays7 === 7;
 
-  const daily30 = buildDailyOrderMap(30, activeDays30, monthWins, num);
-  const daily7 = buildDailyOrderMap(7, activeDays7, weekWins, num + 50);
+  const daily30 = buildDailyOrderMap(30, activeDays30, monthWins, num, activeDays7);
+  const daily7 = daily30.slice(23);
 
   return {
     highestOrder: isVip,
