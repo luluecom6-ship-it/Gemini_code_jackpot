@@ -508,10 +508,13 @@ export async function fetchCustomerJackpotData(
           ? (data.dailyOrders30 as boolean[])
           : buildDailyOrderMap(30, active30Count, isMonthlyWin, seed, active7Count);
 
-        daily7 = Array.isArray(data.dailyOrders7)
+        daily7 = Array.isArray(data.dailyOrders7) && data.dailyOrders7.length === 7 && Array.isArray(data.dailyOrders30)
           ? (data.dailyOrders7 as boolean[])
           : daily30.slice(23);
       }
+
+      const finalDays7 = daily7.filter(Boolean).length;
+      const finalDays30 = daily30.filter(Boolean).length;
 
       // Extract customer name from customer__first_name and customer__last_name if provided
       let derivedName = '';
@@ -531,9 +534,9 @@ export async function fetchCustomerJackpotData(
         customerTotalSpending: customerSpend,
         highestTotalSpending: highestSpend,
         customerOrderCount: orderCount,
-        customerActiveDays: active30Count,
-        customerDays30: active30Count,
-        customerDays7: active7Count,
+        customerActiveDays: finalDays30,
+        customerDays30: finalDays30,
+        customerDays7: finalDays7,
         dailyOrders30: daily30,
         dailyOrders7: daily7,
         mobile: mobile,
@@ -556,8 +559,8 @@ export async function fetchCustomerJackpotData(
 
   // Handle specific customer 0550023188 (1 single order)
   if (mobile === '550023188') {
-    const daily30 = buildDailyOrderMap(30, 1, false, 55002);
-    const daily7 = buildDailyOrderMap(7, 0, false, 55002);
+    const daily30 = buildDailyOrderMap(30, 1, false, 55002, 0);
+    const daily7 = daily30.slice(23);
     return {
       highestOrder: false,
       monthly: false,
@@ -568,7 +571,7 @@ export async function fetchCustomerJackpotData(
       customerOrderCount: 1,
       customerActiveDays: 1,
       customerDays30: 1,
-      customerDays7: 0,
+      customerDays7: daily7.filter(Boolean).length,
       dailyOrders30: daily30,
       dailyOrders7: daily7,
       mobile,
@@ -580,8 +583,8 @@ export async function fetchCustomerJackpotData(
 
   if (mobile === '501112233') {
     // Highest Spender VIP
-    const daily30 = buildDailyOrderMap(30, 28, false, 111);
-    const daily7 = buildDailyOrderMap(7, 6, false, 222);
+    const daily30 = buildDailyOrderMap(30, 28, false, 111, 6);
+    const daily7 = daily30.slice(23);
     return {
       highestOrder: true,
       monthly: false,
@@ -592,7 +595,7 @@ export async function fetchCustomerJackpotData(
       customerOrderCount: 68,
       customerActiveDays: 28,
       customerDays30: 28,
-      customerDays7: 6,
+      customerDays7: daily7.filter(Boolean).length,
       dailyOrders30: daily30,
       dailyOrders7: daily7,
       mobile,
@@ -604,8 +607,8 @@ export async function fetchCustomerJackpotData(
 
   if (mobile === '555444333') {
     // 30-Day Monthly Winner
-    const daily30 = buildDailyOrderMap(30, 30, true, 333);
-    const daily7 = buildDailyOrderMap(7, 7, true, 444);
+    const daily30 = buildDailyOrderMap(30, 30, true, 333, 7);
+    const daily7 = daily30.slice(23);
     return {
       highestOrder: false,
       monthly: true,
@@ -628,8 +631,8 @@ export async function fetchCustomerJackpotData(
 
   if (mobile === '512345678') {
     // Weekly Winner
-    const daily30 = buildDailyOrderMap(30, 21, false, 555);
-    const daily7 = buildDailyOrderMap(7, 7, true, 666);
+    const daily30 = buildDailyOrderMap(30, 21, false, 555, 7);
+    const daily7 = daily30.slice(23);
     return {
       highestOrder: false,
       monthly: false,
@@ -652,8 +655,8 @@ export async function fetchCustomerJackpotData(
 
   if (mobile === '500000000') {
     // Zero Orders
-    const daily30 = buildDailyOrderMap(30, 0, false, 777);
-    const daily7 = buildDailyOrderMap(7, 0, false, 888);
+    const daily30 = buildDailyOrderMap(30, 0, false, 777, 0);
+    const daily7 = daily30.slice(23);
     return {
       highestOrder: false,
       monthly: false,
@@ -687,6 +690,8 @@ export async function fetchCustomerJackpotData(
 
   const daily30 = buildDailyOrderMap(30, activeDays30, monthWins, num, activeDays7);
   const daily7 = daily30.slice(23);
+  const actualDays7 = daily7.filter(Boolean).length;
+  const actualDays30 = daily30.filter(Boolean).length;
 
   return {
     highestOrder: isVip,
@@ -696,9 +701,9 @@ export async function fetchCustomerJackpotData(
     customerTotalSpending: spend,
     highestTotalSpending: Math.max(14890.50, spend + 1200),
     customerOrderCount: orders,
-    customerActiveDays: activeDays30,
-    customerDays30: activeDays30,
-    customerDays7: activeDays7,
+    customerActiveDays: actualDays30,
+    customerDays30: actualDays30,
+    customerDays7: actualDays7,
     dailyOrders30: daily30,
     dailyOrders7: daily7,
     mobile,
