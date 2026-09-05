@@ -340,6 +340,135 @@ export const DEMO_CUSTOMERS: { label: string; mobile: string; desc: string; type
   { label: '🛒 New Customer (0 orders)', mobile: '500000000', desc: 'No prior orders in the last 30 days', type: 'none' },
 ];
 
+/**
+ * Parses order_dates from various possible API response formats.
+ * Handles: JSON arrays, stringified JSON arrays, comma-separated strings,
+ * BigQuery ARRAY format, and timestamp strings.
+ */
+function parseOrderDates(data: Record<string, unknown>): string[] | null {
+  const rawDates = data.order_dates ?? data.orderDates ?? data.dates ?? data.order_date_list;
+
+  if (!rawDates) return null;
+
+  // Unwraps a single array element which may be:
+  // - a plain string: "2026-08-05" or "2026-08-05T00:00:00.000Z"
+  // - a BigQuery REST-style wrapper: { v: "2026-08-05" }
+  // - a generic wrapper: { value: "2026-08-05" } or { date: "2026-08-05" }
+  const unwrap = (item: unknown): string => {
+    if (item && typeof item === 'object') {
+      const obj = item as Record<string, unknown>;
+      const inner = obj.v ?? obj.value ?? obj.date ?? obj.date_value;
+      if (inner !== undefined && inner !== null) return String(inner).trim();
+      return '';
+    }
+    return String(item ?? '').trim();
+  };
+
+  const toIsoDate = (s: string): string => {
+    // Extract YYYY-MM-DD from timestamps like "2026-08-05T00:00:00.000Z"
+    return s.length >= 10 ? s.substring(0, 10) : s;
+  };
+
+  // If already an array of dates (or wrapped date objects)
+  if (Array.isArray(rawDates)) {
+    const dates = rawDates
+      .map((d: unknown) => toIsoDate(unwrap(d)))
+      .filter((d: string) => /^\d{4}-\d{2}-\d{2}$/.test(d));
+    return dates.length > 0 ? dates : null;
+  }
+
+  // If it's a single wrapped/plain date object (not an array)
+  if (rawDates && typeof rawDates === 'object') {
+    const single = toIsoDate(unwrap(rawDates));
+    return /^\d{4}-\d{2}-\d{2}$/.test(single) ? [single] : null;
+  }
+
+  // If it's a string (stringified JSON array, single date, or comma-separated)
+  if (typeof rawDates === 'string') {
+    const trimmed = rawDates.trim();
+    if (!trimmed) return null;
+
+    // Try JSON parse first
+    try {
+      const parsed = JSON.parse(trimmed);
+      if (Array.isArray(parsed)) {
+        const dates = parsed
+          .map((d: unknown) => toIsoDate(unwrap(d)))
+          .filter((d: string) => /^\d{4}-\d{2}-\d{2}$/.test(d));
+        return dates.length > 0 ? dates : null;
+      }
+      if (parsed && typeof parsed === 'object') {
+        const single = toIsoDate(unwrap(parsed));
+        return /^\d{4}-\d{2}-\d{2}$/.test(single) ? [single] : null;
+      }
+    } catch {
+      // Not valid JSON, try comma-separated / single-date below
+    }
+
+    // Try comma-separated (with or without brackets/quotes)
+    const cleaned = trimmed.replace(/[\[\]"']/g, '');
+    if (cleaned.includes(',')) {
+      const dates = cleaned
+        .split(',')
+        .map((d: string) => toIsoDate(d.trim()))
+        .filter((d: string) => /^\d{4}-\d{2}-\d{2}$/.test(d));
+      return dates.length > 0 ? dates : null;
+    }
+
+    // Single bare date string, e.g. "2026-08-05" or "2026-08-05T00:00:00.000Z"
+    const single = toIsoDate(cleaned.trim());
+    if (/^\d{4}-\d{2}-\d{2}$/.test(single)) {
+      return [single];
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Maps an array of YYYY-MM-DD date strings into 30-day and 7-day boolean arrays
+ * aligned to today's calendar. Used for the CalendarSlotGrid component.
+ */
+/**
+ * Returns "today" as a YYYY-MM-DD string in Asia/Riyadh, regardless of the
+ * browser's local timezone. The backend's 30-day window and order_date
+ * values are all computed via DATE(date_placed, 'Asia/Riyadh'), so the
+ * frontend grid must anchor to the same calendar day or dates near the
+ * midnight boundary will land in the wrong cell (or fall off the grid
+ * entirely) for staff viewing this outside UTC+3.
+ */
+function getRiyadhDateParts(offsetDays: number): string {
+  const now = new Date();
+  // en-CA locale formats as YYYY-MM-DD, which is what we need directly.
+  const formatter = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Riyadh',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  });
+  const todayRiyadh = formatter.format(now); // "YYYY-MM-DD" for Riyadh "now"
+
+  // Shift by offsetDays using a UTC-based Date to avoid DST/local drift,
+  // since Riyadh has no DST this is a safe, simple day-level shift.
+  const [y, m, d] = todayRiyadh.split('-').map(Number);
+  const shifted = new Date(Date.UTC(y, m - 1, d));
+  shifted.setUTCDate(shifted.getUTCDate() + offsetDays);
+  return shifted.toISOString().split('T')[0];
+}
+
+function mapOrderDatesToDailyArrays(orderDates: string[]): { daily30: boolean[]; daily7: boolean[] } {
+  const orderDateSet = new Set(orderDates);
+  const daily30: boolean[] = [];
+
+  for (let i = 29; i >= 0; i--) {
+    const yyyyMmDd = getRiyadhDateParts(-i);
+    daily30.push(orderDateSet.has(yyyyMmDd));
+  }
+
+  const daily7 = daily30.slice(23); // Last 7 days of the 30-day window
+  return { daily30, daily7 };
+}
+
 export async function fetchCustomerJackpotData(
   rawMobile: string,
   customApiUrl?: string,
@@ -371,8 +500,21 @@ export async function fetchCustomerJackpotData(
           const isMonthlyWin = Boolean(data.monthly);
           const isWeeklyWin = Boolean(data.weekly);
 
-          const daily30 = buildDailyOrderMap(30, active30Count, isMonthlyWin, seed);
-          const daily7 = buildDailyOrderMap(7, active7Count, isWeeklyWin, seed + 99);
+          // Use real order_dates if the API returned them, otherwise fall back to buildDailyOrderMap
+          const gsParsedDates = parseOrderDates(data);
+          let daily30: boolean[];
+          let daily7: boolean[];
+          if (gsParsedDates && gsParsedDates.length > 0) {
+            const mapped = mapOrderDatesToDailyArrays(gsParsedDates);
+            daily30 = mapped.daily30;
+            daily7 = mapped.daily7;
+          } else {
+            daily30 = buildDailyOrderMap(30, active30Count, isMonthlyWin, seed);
+            daily7 = buildDailyOrderMap(7, active7Count, isWeeklyWin, seed + 99);
+          }
+
+          const finalDays30 = daily30.filter(Boolean).length;
+          const finalDays7 = daily7.filter(Boolean).length;
 
           resolve({
             highestOrder: Boolean(data.highestOrder),
@@ -382,9 +524,9 @@ export async function fetchCustomerJackpotData(
             customerTotalSpending: Number(data.customerTotalSpending ?? data.customer_total_spending ?? 0),
             highestTotalSpending: Number(data.highestTotalSpending ?? data.highest_total_spending ?? 0),
             customerOrderCount: Number(data.customerOrderCount ?? data.customer_order_count ?? 0),
-            customerActiveDays: active30Count,
-            customerDays30: active30Count,
-            customerDays7: active7Count,
+            customerActiveDays: finalDays30,
+            customerDays30: finalDays30,
+            customerDays7: finalDays7,
             dailyOrders30: daily30,
             dailyOrders7: daily7,
             mobile: mobile,
@@ -407,7 +549,7 @@ export async function fetchCustomerJackpotData(
   if (webAppUrl && webAppUrl.startsWith('http')) {
     try {
       const separator = webAppUrl.includes('?') ? '&' : '?';
-      const endpoint = `${webAppUrl}${separator}mobile=${encodeURIComponent(mobile)}&user=${encodeURIComponent(operatorUser)}&checkedBy=${encodeURIComponent(operatorUser)}&phone=${encodeURIComponent(mobile)}&checkCustomer=${encodeURIComponent(mobile)}`;
+      const endpoint = `${webAppUrl}${separator}mobile=${encodeURIComponent(mobile)}&user=${encodeURIComponent(operatorUser)}&checkedBy=${encodeURIComponent(operatorUser)}&phone=${encodeURIComponent(mobile)}&checkCustomer=${encodeURIComponent(mobile)}&include_dates=true`;
       
       const response = await fetch(endpoint, {
         method: 'GET',
@@ -488,22 +630,18 @@ export async function fetchCustomerJackpotData(
         (customerSpend > 0 && customerSpend >= highestSpend)
       );
 
-      // If real order_dates array is provided (e.g. ['2026-08-20', '2026-08-23']), map directly to 30 calendar days
+      // Parse order_dates from various API response formats (JSON array, stringified, comma-separated)
+      const parsedOrderDates = parseOrderDates(data);
       let daily30: boolean[];
       let daily7: boolean[];
 
-      if (Array.isArray(data.order_dates) || Array.isArray(data.orderDates)) {
-        const orderDateSet = new Set((data.order_dates || data.orderDates) as string[]);
-        const now = new Date();
-        daily30 = [];
-        for (let i = 29; i >= 0; i--) {
-          const d = new Date(now);
-          d.setDate(now.getDate() - i);
-          const yyyyMmDd = d.toISOString().split('T')[0];
-          daily30.push(orderDateSet.has(yyyyMmDd));
-        }
-        daily7 = daily30.slice(23); // Last 7 days
+      if (parsedOrderDates && parsedOrderDates.length > 0) {
+        // Real dates from BigQuery — map precisely to 30-day calendar
+        const mapped = mapOrderDatesToDailyArrays(parsedOrderDates);
+        daily30 = mapped.daily30;
+        daily7 = mapped.daily7;
       } else {
+        // Fallback: use pre-built boolean arrays or algorithmic placement
         daily30 = Array.isArray(data.dailyOrders30)
           ? (data.dailyOrders30 as boolean[])
           : buildDailyOrderMap(30, active30Count, isMonthlyWin, seed, active7Count);
@@ -517,13 +655,24 @@ export async function fetchCustomerJackpotData(
       const finalDays30 = daily30.filter(Boolean).length;
 
       // Extract customer name from customer__first_name and customer__last_name if provided
+      // Skip hashed/anonymized names (long hex strings from BigQuery MAX() aggregation)
+      const isHashedName = (val: unknown) => {
+        const s = String(val || '').trim();
+        return s.length > 20 && /^[a-f0-9]+$/i.test(s);
+      };
+
       let derivedName = '';
       if (data.customerName || data.name) {
-        derivedName = String(data.customerName || data.name);
+        const raw = String(data.customerName || data.name);
+        derivedName = isHashedName(raw) ? '' : raw;
       } else if (data.customer__first_name || data.customer__last_name) {
-        derivedName = `${data.customer__first_name || ''} ${data.customer__last_name || ''}`.trim();
+        const first = isHashedName(data.customer__first_name) ? '' : String(data.customer__first_name || '');
+        const last = isHashedName(data.customer__last_name) ? '' : String(data.customer__last_name || '');
+        derivedName = `${first} ${last}`.trim();
       } else if (data.first_name || data.last_name) {
-        derivedName = `${data.first_name || ''} ${data.last_name || ''}`.trim();
+        const first = isHashedName(data.first_name) ? '' : String(data.first_name || '');
+        const last = isHashedName(data.last_name) ? '' : String(data.last_name || '');
+        derivedName = `${first} ${last}`.trim();
       }
 
       return {
